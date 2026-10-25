@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>riffgen</title>
+<style>
+:root{--bg:#fff;--fg:#1c1c20;--mut:#6c6c75;--card:#f2f2f5;--line:#d8d8de;--acc:#4f5bd5;color-scheme:light dark}
+@media(prefers-color-scheme:dark){:root{--bg:#151518;--fg:#ececf1;--mut:#9b9ba6;--card:#202025;--line:#34343c}}
+*{box-sizing:border-box}
+body{margin:0;display:grid;grid-template-columns:340px 1fr;height:100vh;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif}
+aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}
+.ctl{padding:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 8px;align-items:end;border-bottom:1px solid var(--line);max-height:65vh;overflow:auto}
+.ctl label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:3px;min-width:0}
+.ctl label.chk{flex-direction:row;align-items:center;gap:8px;font-size:13px;color:var(--fg)}
+.w{grid-column:1/-1}
+input,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 7px}
+.ctl input:not([type=checkbox]),.ctl select{width:100%;min-width:0;height:32px}
+input[type=checkbox]{width:auto;height:auto;margin:0}
+button,a.btn{cursor:pointer}button.p{background:var(--acc);border-color:var(--acc);color:#fff}
+a.btn{font:inherit;color:inherit;text-decoration:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 9px}
+#list{overflow:auto;flex:1;min-height:120px}
+#msg{min-height:1.2em}
+.row{display:grid;grid-template-columns:30px 1fr 42px;gap:6px;padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--line)}
+.row.on{background:var(--card);box-shadow:inset 3px 0 var(--acc)}
+.row small{color:var(--mut)}
+main{display:flex;flex-direction:column;min-width:0;padding:14px;gap:10px}
+#info{color:var(--mut)}
+canvas{width:100%;flex:1;min-height:0;background:var(--card);border-radius:8px}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}
+@media(max-width:820px){body{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid var(--line)}#list{max-height:240px}canvas{min-height:320px}}
+</style>
+<body>
+<aside>
+ <div class="ctl">
+  <label class="w"><span data-i="file"></span><input id="file" type="file" accept=".mid,.midi"></label>
+  <label><span data-i="count"></span><input id="count" type="number" value="16" min="1" max="64"></label>
+  <label><span data-i="grid"></span><select id="grid"><option value="1" data-i="g1"></option><option value="0.5" selected data-i="g05"></option><option value="0.25" data-i="g025"></option></select></label>
+  <label><span data-i="omin"></span><input id="olo" type="number" value="0" min="0" max="1" step="0.1"></label>
+  <label><span data-i="omax"></span><input id="ohi" type="number" value="0.9" min="0" max="1" step="0.1"></label>
+  <label><span data-i="key"></span><input id="key" data-ph="key_ph"></label>
+  <label><span>Seed</span><input id="seed" data-ph="seed_ph"></label>
+  <label class="w" data-t="win_t"><span data-i="win"></span><input id="window" data-ph="win_ph"></label>
+  <label class="w chk" data-t="sweep_t"><input id="sweep" type="checkbox"><span data-i="sweep"></span></label>
+  <button class="p w" onclick="gen()" data-i="gen"></button>
+  <div id="msg" class="w" style="color:var(--mut)"></div>
+ </div>
+ <div id="list"></div>
+</aside>
+<main>
+ <div id="info"></div>
+ <canvas id="cv"></canvas>
+ <div class="bar">
+  <button class="p" onclick="ph0?stop():play()">▶ / ■</button>
+  <label><input id="loop" type="checkbox" checked> <span data-i="loop"></span></label>
+  <label><input id="pad" type="checkbox" checked> <span data-i="pad"></span></label>
+  <a class="btn" id="dl" href="#" data-i="dl"></a>
+  <a class="btn" id="dlall" href="#" data-i="dlall"></a>
+  <span><i class="dot" style="background:#2a9d8f"></i>anchor <i class="dot" style="background:#e0a82e"></i>color <i class="dot" style="background:#e63946"></i>tension</span>
+  <button id="lang" onclick="setLang(L==='en'?'tr':'en')" title="Language / Dil"></button>
+ </div>
+</main>
+<script>
+const $=id=>document.getElementById(id),ROLE={anchor:'#2a9d8f',color:'#e0a82e',tension:'#e63946'},NM=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+let D=null,sel=0,AC=null,M=null,tm=0,raf=0,ph0=null;
+const msg=t=>$('msg').textContent=t||'';
+
+let L='__LANG__';try{L=localStorage.getItem('lang')||L}catch(e){}
+const S={
+ en:{file:'Chord MIDI file',count:'Candidates',grid:'Grid',g1:'quarter',g05:'eighth',g025:'sixteenth',omin:'Outside min',omax:'Outside max',key:'Key',key_ph:'auto (e.g. Am)',seed_ph:'random',win:'Window (beats)',win_ph:'auto; e.g. 4 for arpeggios',win_t:'Analyse chords in fixed windows, for arpeggios or very busy chord tracks',sweep:'Sweep: each skeleton at 5 outside levels',sweep_t:'The candidate count becomes the number of skeletons',gen:'Generate',hint:'Pick a chord MIDI file and press “Generate”. Shortcuts: ↑/↓ select, Space play/stop.',loop:'loop',pad:'play chords',dl:'Download this candidate (.mid)',dlall:'Download all (.mid)',pick:'Pick a chord MIDI file first.',busy:'Generating…',noserver:'Could not reach the server: ',unres:'unresolved'},
+ tr:{file:'Akor MIDI dosyası',count:'Aday sayısı',grid:'Izgara',g1:'dörtlük',g05:'sekizlik',g025:'onaltılık',omin:'Outside min',omax:'Outside maks',key:'Tonalite',key_ph:'otomatik (örn. Am)',seed_ph:'rastgele',win:'Pencere (vuruş)',win_ph:'otomatik; arpej için örn. 4',win_t:'Arpej veya çok yoğun akor izleri için akorları sabit pencerelerle çöz',sweep:'Sweep: her iskelet 5 outside seviyesinde',sweep_t:'Aday sayısı iskelet sayısı olur',gen:'Üret',hint:'Bir akor MIDI dosyası seçip “Üret”e bas. Kısayollar: ↑/↓ aday seç, Boşluk oynat/durdur.',loop:'döngü',pad:'akorları çal',dl:'Bu adayı indir (.mid)',dlall:'Hepsini indir (.mid)',pick:'Önce bir akor MIDI dosyası seç.',busy:'Üretiliyor…',noserver:'Sunucuya ulaşılamadı: ',unres:'çözülmemiş'}};
+const T=k=>S[L][k]||S.en[k];
+function apply(){
+  document.documentElement.lang=L;
+  document.querySelectorAll('[data-i]').forEach(e=>e.textContent=T(e.dataset.i));
+  document.querySelectorAll('[data-ph]').forEach(e=>e.placeholder=T(e.dataset.ph));
+  document.querySelectorAll('[data-t]').forEach(e=>e.title=T(e.dataset.t));
+  $('lang').textContent=L==='en'?'TR':'EN';
+  if(D){renderList();select(sel)}else $('info').textContent=T('hint');
+}
+function setLang(l){L=l;try{localStorage.setItem('lang',l)}catch(e){}apply()}
+
+function renderList(){
+  $('list').innerHTML=D.candidates.map((c,k)=>`<div class="row" onclick="select(${k},true)"><b>${c.g>0?'G'+c.g:'#'+c.i}</b><span>${c.s} · o=${c.o.toFixed(2)}<br><small>tension ${c.m.tension} (${T('unres')} ${c.m.unresolved})</small></span><b>${c.m.consonance}</b></div>`).join('');
+}
+
+async function gen(){
+  const f=$('file').files[0];if(!f)return msg(T('pick'));
+  const q=new URLSearchParams({count:$('count').value,grid:$('grid').value,olo:$('olo').value,ohi:$('ohi').value,key:$('key').value,seed:$('seed').value,window:$('window').value,sweep:$('sweep').checked?1:0,lang:L});
+  msg(T('busy'));
+  try{
+    const r=await fetch('/api/generate?'+q,{method:'POST',body:await f.arrayBuffer()}),j=await r.json();
+    if(!r.ok)return msg(j.error);
+    D=j;msg('');stop();
+    $('info').textContent=`${D.key} · ${D.bpm} BPM · ${D.chords.map(c=>c.n).join(' ')} · seed ${D.seed}`;
+    renderList();select(0);
+  }catch(e){msg(T('noserver')+e)}
+}
+
+function select(k,auto){
+  sel=k;document.querySelectorAll('.row').forEach((r,i)=>{r.classList.toggle('on',i===k);if(i===k)r.scrollIntoView({block:'nearest'})});
+  $('dl').href='/midi/'+D.candidates[k].i+'.mid';$('dlall').href='/midi/all.mid';
+  if(auto)play();else draw();
+}
+
+function draw(ph){
+  const cv=$('cv'),d=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*d;cv.height=H*d;
+  const g=cv.getContext('2d');g.scale(d,d);if(!D)return;
+  const c=D.candidates[sel],ps=c.n.map(n=>n.p),lo=Math.min(...ps)-2,hi=Math.max(...ps)+2,top=22,rh=(H-top)/(hi-lo+1),fg=getComputedStyle(document.body).color;
+  const x=t=>t/D.total*W,y=p=>top+(hi-p)*rh;
+  g.font='12px system-ui';
+  for(let p=lo;p<=hi;p++)if([1,3,6,8,10].includes(p%12)){g.globalAlpha=.06;g.fillStyle=fg;g.fillRect(0,y(p),W,rh)}
+  g.globalAlpha=.35;g.fillStyle=fg;D.chords.forEach(ch=>g.fillRect(x(ch.s),0,1,H));
+  g.globalAlpha=1;D.chords.forEach(ch=>g.fillText(ch.n,x(ch.s)+5,14));
+  c.n.forEach(n=>{const w=Math.max(3,x(n.l));g.fillStyle=ROLE[n.r];g.fillRect(x(n.t),y(n.p)+1,w,rh-2);
+    if(rh>=12&&w>22){g.fillStyle='#000';g.fillText(NM[n.p%12]+(Math.floor(n.p/12)-1),x(n.t)+3,y(n.p)+rh-3)}});
+  if(ph!=null){g.fillStyle=fg;g.fillRect(x(ph),0,2,H)}
+}
+
+function stop(){clearTimeout(tm);cancelAnimationFrame(raf);if(M){M.disconnect();M=null}ph0=null;draw()}
+
+function play(){
+  if(!D)return;stop();AC=AC||new AudioContext();AC.resume();
+  const c=D.candidates[sel],sec=t=>t/D.tpb*60/D.bpm,t0=AC.currentTime+.06,total=sec(D.total);
+  M=AC.createGain();const lp=AC.createBiquadFilter();lp.frequency.value=2400;M.connect(lp).connect(AC.destination);
+  const tone=(p,t,len,type,v)=>{const o=AC.createOscillator(),a=AC.createGain();o.type=type;o.frequency.value=440*2**((p-69)/12);
+    a.gain.setValueAtTime(0,t);a.gain.linearRampToValueAtTime(v,t+.01);a.gain.exponentialRampToValueAtTime(.0005,t+len);o.connect(a).connect(M);o.start(t);o.stop(t+len+.05)};
+  if($('pad').checked)D.chords.forEach(ch=>ch.tones.forEach(pc=>tone(48+pc,t0+sec(ch.s),sec(ch.e-ch.s),'triangle',.05)));
+  const V={anchor:.12,color:.1,tension:.08};
+  c.n.forEach(n=>tone(n.p,t0+sec(n.t),Math.max(.12,sec(n.l)*1.4),'sawtooth',V[n.r]));
+  ph0=t0;const tick=()=>{const e=AC.currentTime-t0;draw(e>=0&&e<=total?e/total*D.total:null);raf=requestAnimationFrame(tick)};tick();
+  tm=setTimeout(()=>$('loop').checked?play():stop(),(total+.1)*1000);
+}
+
+addEventListener('resize',()=>draw());
+apply();
+addEventListener('keydown',e=>{
+  if(!D||e.target.matches('input,select'))return;
+  if(e.code==='Space'){e.preventDefault();ph0?stop():play()}
+  else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();select(Math.max(0,Math.min(D.candidates.length-1,sel+(e.key==='ArrowDown'?1:-1))),true)}
+});
+</script>
+</html>
