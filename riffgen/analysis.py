@@ -161,8 +161,8 @@ def _pearson(x, y) -> float:
     return num / den if den else 0.0
 
 
-_MINOR_LIKE = {"m", "m7", "dim", "m7b5", "dim7"}
-_MAJOR_LIKE = {"", "7", "maj7"}
+_MINOR_LIKE = {"m", "m7", "dim", "m7b5", "dim7", "m6", "m9", "madd9", "mmaj7"}
+_MAJOR_LIKE = {"", "7", "maj7", "6", "9", "maj9", "add9"}
 
 
 def detect_key(song: Song, first_chord=None) -> Key:
@@ -188,6 +188,102 @@ def detect_key(song: Song, first_chord=None) -> Key:
             if best is None or r > best[0]:
                 best = (r, tonic, mode)
     return Key(best[1], best[2])
+
+
+# ------------------------------------------------------------ manual chord entry
+# Kept separate from QUALITIES on purpose: MIDI chord *detection* iterates QUALITIES,
+# and adding e.g. "6" there would make C6 and Am7 indistinguishable.
+MANUAL_QUALITIES = dict(QUALITIES)
+MANUAL_QUALITIES.update({
+    "6": (0, 4, 7, 9), "m6": (0, 3, 7, 9),
+    "9": (0, 4, 7, 10, 14), "m9": (0, 3, 7, 10, 14), "maj9": (0, 4, 7, 11, 14),
+    "add9": (0, 4, 7, 14), "madd9": (0, 3, 7, 14), "mmaj7": (0, 3, 7, 11),
+})
+
+_QUALITY_ALIASES = {
+    "maj": "", "M": "", "min": "m", "-": "m", "min7": "m7", "-7": "m7",
+    "M7": "maj7", "Δ": "maj7", "Δ7": "maj7", "mM7": "mmaj7",
+    "+": "aug", "°": "dim", "°7": "dim7", "ø": "m7b5", "ø7": "m7b5", "sus": "sus4",
+}
+
+# letter, accidental, quality (anything but "/"), optional /bass
+_CHORD_RE = re.compile(r"^([A-Ga-g])([#b♯♭]?)([^/]*)(?:/([A-Ga-g])([#b♯♭]?))?$")
+
+
+def validate_manual_params(bpm, bars):
+    """Return (bpm: float, bars: int) or raise ValueError with a localised message."""
+    try:
+        bpm = float(bpm)
+    except (TypeError, ValueError):
+        raise ValueError(t("err.bpm_range"))
+    if not 20 <= bpm <= 300:  # also rejects nan and inf
+        raise ValueError(t("err.bpm_range"))
+    try:
+        bars = int(bars)
+    except (TypeError, ValueError):
+        raise ValueError(t("err.bars_range"))
+    if not 1 <= bars <= 16:
+        raise ValueError(t("err.bars_range"))
+    return bpm, bars
+
+
+def _pitch_class(letter: str, acc: str) -> int:
+    pc = _NOTE_LETTER[letter.upper()]
+    if acc in ("#", "♯"):
+        pc += 1
+    elif acc in ("b", "♭"):
+        pc -= 1
+    return pc % 12
+
+
+def _parse_chord_token(token: str):
+    """(root pc, canonical quality, tones) for 'Am', 'F#m7', 'Bbmaj7', 'C/G' ...
+
+    An unknown quality is an error; it never falls back to a major triad. For a slash
+    chord the bass note is added to the tones if the chord does not already contain it.
+    """
+    m = _CHORD_RE.match(token)
+    if not m:
+        raise ValueError(t("err.bad_chord", token=token))
+    letter, acc, raw_qual, bass_letter, bass_acc = m.groups()
+    quality = _QUALITY_ALIASES.get(raw_qual, raw_qual)
+    if quality not in MANUAL_QUALITIES:
+        raise ValueError(t("err.bad_chord", token=token))
+    root = _pitch_class(letter, acc)
+    tones = tuple((root + i) % 12 for i in MANUAL_QUALITIES[quality])
+    if bass_letter:
+        bass = _pitch_class(bass_letter, bass_acc)
+        if bass not in tones:
+            tones += (bass,)
+    return root, quality, tones
+
+
+def parse_chords_text(
+    text: str,
+    bars_per_chord: int = 1,
+    bpm: float = 120.0,
+    ticks_per_beat: int = 480,
+) -> list:
+    """Parse a space/comma/bar-line separated chord string into a list of Chord objects.
+
+    Tokens look like ``Am``, ``F#m7``, ``Bb``, ``Cmaj7``, ``Gsus4``, ``Cm9``, ``C/G``.
+    Separators are whitespace, ``,`` and ``|`` (``/`` is *not* a separator: it marks a
+    slash chord). Unknown chord types raise ValueError.
+
+    bars_per_chord: bars each chord occupies (4/4 assumed).
+    bpm: kept for API compatibility; the tick length does not depend on it.
+    """
+    tokens = [x for x in re.split(r"[\s,|]+", text.strip()) if x]
+    if not tokens:
+        raise ValueError(t("err.no_chord_text"))
+
+    ticks_per_chord = ticks_per_beat * 4 * bars_per_chord  # assume 4/4
+    chords = []
+    for idx, token in enumerate(tokens):
+        root, quality, tones = _parse_chord_token(token)
+        start = idx * ticks_per_chord
+        chords.append(Chord(start=start, end=start + ticks_per_chord, root=root, quality=quality, tones=tones))
+    return chords
 
 
 def parse_key(text: str) -> Key:

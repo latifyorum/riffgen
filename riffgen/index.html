@@ -7,12 +7,18 @@
 *{box-sizing:border-box}
 body{margin:0;display:grid;grid-template-columns:340px 1fr;height:100vh;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif}
 aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tab{flex:1;padding:8px 4px;text-align:center;font-size:12px;cursor:pointer;border:none;background:none;color:var(--mut)}
+.tab.on{color:var(--acc);border-bottom:2px solid var(--acc);margin-bottom:-1px}
+.tabpanel{display:none}.tabpanel.on{display:contents}
 .ctl{padding:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 8px;align-items:end;border-bottom:1px solid var(--line);max-height:65vh;overflow:auto}
 .ctl label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:3px;min-width:0}
 .ctl label.chk{flex-direction:row;align-items:center;gap:8px;font-size:13px;color:var(--fg)}
 .w{grid-column:1/-1}
-input,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 7px}
-.ctl input:not([type=checkbox]),.ctl select{width:100%;min-width:0;height:32px}
+input,select,button,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 7px}
+.ctl input:not([type=checkbox]),.ctl select,.ctl textarea{width:100%;min-width:0}
+.ctl input:not([type=checkbox]),.ctl select{height:32px}
+.ctl textarea{resize:vertical;min-height:60px}
 input[type=checkbox]{width:auto;height:auto;margin:0}
 button,a.btn{cursor:pointer}button.p{background:var(--acc);border-color:var(--acc);color:#fff}
 a.btn{font:inherit;color:inherit;text-decoration:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 9px}
@@ -30,8 +36,22 @@ canvas{width:100%;flex:1;min-height:0;background:var(--card);border-radius:8px}
 </style>
 <body>
 <aside>
+ <div class="tabs">
+  <button class="tab on" id="tab-midi" onclick="switchTab('midi')" data-i="tab_midi"></button>
+  <button class="tab" id="tab-text" onclick="switchTab('text')" data-i="tab_text"></button>
+ </div>
  <div class="ctl">
-  <label class="w"><span data-i="file"></span><input id="file" type="file" accept=".mid,.midi"></label>
+  <!-- ── MIDI tab ─────────────────────────────────────── -->
+  <span class="tabpanel on" id="panel-midi">
+   <label class="w"><span data-i="file"></span><input id="file" type="file" accept=".mid,.midi"></label>
+  </span>
+  <!-- ── Manual chord tab ────────────────────────────── -->
+  <span class="tabpanel" id="panel-text">
+   <label class="w"><span data-i="chord_text_label"></span><textarea id="chord_text" rows="3" data-ph="chord_text_ph"></textarea></label>
+   <label><span data-i="chord_bpm_label"></span><input id="chord_bpm" type="number" value="120" min="20" max="300"></label>
+   <label><span data-i="chord_bars_label"></span><input id="chord_bars" type="number" value="1" min="1" max="8"></label>
+  </span>
+  <!-- ── Shared controls ─────────────────────────────── -->
   <label><span data-i="count"></span><input id="count" type="number" value="16" min="1" max="64"></label>
   <label><span data-i="grid"></span><select id="grid"><option value="1" data-i="g1"></option><option value="0.5" selected data-i="g05"></option><option value="0.25" data-i="g025"></option></select></label>
   <label><span data-i="omin"></span><input id="olo" type="number" value="0" min="0" max="1" step="0.1"></label>
@@ -60,13 +80,13 @@ canvas{width:100%;flex:1;min-height:0;background:var(--card);border-radius:8px}
 </main>
 <script>
 const $=id=>document.getElementById(id),ROLE={anchor:'#2a9d8f',color:'#e0a82e',tension:'#e63946'},NM=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-let D=null,sel=0,AC=null,M=null,tm=0,raf=0,ph0=null;
+let D=null,sel=0,AC=null,M=null,tm=0,raf=0,ph0=null,TAB='midi';
 const msg=t=>$('msg').textContent=t||'';
 
 let L='__LANG__';try{L=localStorage.getItem('lang')||L}catch(e){}
 const S={
- en:{file:'Chord MIDI file',count:'Candidates',grid:'Grid',g1:'quarter',g05:'eighth',g025:'sixteenth',omin:'Outside min',omax:'Outside max',key:'Key',key_ph:'auto (e.g. Am)',seed_ph:'random',win:'Window (beats)',win_ph:'auto; e.g. 4 for arpeggios',win_t:'Analyse chords in fixed windows, for arpeggios or very busy chord tracks',sweep:'Sweep: each skeleton at 5 outside levels',sweep_t:'The candidate count becomes the number of skeletons',gen:'Generate',hint:'Pick a chord MIDI file and press “Generate”. Shortcuts: ↑/↓ select, Space play/stop.',loop:'loop',pad:'play chords',dl:'Download this candidate (.mid)',dlall:'Download all (.mid)',pick:'Pick a chord MIDI file first.',busy:'Generating…',noserver:'Could not reach the server: ',unres:'unresolved'},
- tr:{file:'Akor MIDI dosyası',count:'Aday sayısı',grid:'Izgara',g1:'dörtlük',g05:'sekizlik',g025:'onaltılık',omin:'Outside min',omax:'Outside maks',key:'Tonalite',key_ph:'otomatik (örn. Am)',seed_ph:'rastgele',win:'Pencere (vuruş)',win_ph:'otomatik; arpej için örn. 4',win_t:'Arpej veya çok yoğun akor izleri için akorları sabit pencerelerle çöz',sweep:'Sweep: her iskelet 5 outside seviyesinde',sweep_t:'Aday sayısı iskelet sayısı olur',gen:'Üret',hint:'Bir akor MIDI dosyası seçip “Üret”e bas. Kısayollar: ↑/↓ aday seç, Boşluk oynat/durdur.',loop:'döngü',pad:'akorları çal',dl:'Bu adayı indir (.mid)',dlall:'Hepsini indir (.mid)',pick:'Önce bir akor MIDI dosyası seç.',busy:'Üretiliyor…',noserver:'Sunucuya ulaşılamadı: ',unres:'çözülmemiş'}};
+ en:{file:'Chord MIDI file',count:'Candidates',grid:'Grid',g1:'quarter',g05:'eighth',g025:'sixteenth',omin:'Outside min',omax:'Outside max',key:'Key',key_ph:'auto (e.g. Am)',seed_ph:'random',win:'Window (beats)',win_ph:'auto; e.g. 4 for arpeggios',win_t:'Analyse chords in fixed windows, for arpeggios or very busy chord tracks',sweep:'Sweep: each skeleton at 5 outside levels',sweep_t:'The candidate count becomes the number of skeletons',gen:'Generate',hint:'Pick a chord MIDI file or enter chords manually, then press “Generate”. Shortcuts: ↑/↓ select, Space play/stop.',loop:'loop',pad:'play chords',dl:'Download this candidate (.mid)',dlall:'Download all (.mid)',pick:'Pick a chord MIDI file first.',pick_text:'Enter at least one chord first (e.g. Am Dm G C).',busy:'Generating…',noserver:'Could not reach the server: ',unres:'unresolved',tab_midi:'MIDI file',tab_text:'Manual chords',chord_text_label:'Chord progression (e.g. Am Dm G C)',chord_text_ph:'Am Dm G C',chord_bpm_label:'BPM',chord_bars_label:'Bars per chord'},
+ tr:{file:'Akor MIDI dosyası',count:'Aday sayısı',grid:'Izgara',g1:'dörtlük',g05:'sekizlik',g025:'onaltılık',omin:'Outside min',omax:'Outside maks',key:'Tonalite',key_ph:'otomatik (örn. Am)',seed_ph:'rastgele',win:'Pencere (vuruş)',win_ph:'otomatik; arpej için örn. 4',win_t:'Arpej veya çok yoğun akor izleri için akorları sabit pencerelerle çöz',sweep:'Sweep: her iskelet 5 outside seviyesinde',sweep_t:'Aday sayısı iskelet sayısı olur',gen:'Üret',hint:'Bir akor MIDI dosyası seç ya da akorları manuel gir, sonra “Üret”e bas. Kısayollar: ↑/↓ aday seç, Boşluk oynat/durdur.',loop:'döngü',pad:'akorları çal',dl:'Bu adayı indir (.mid)',dlall:'Hepsini indir (.mid)',pick:'Önce bir akor MIDI dosyası seç.',pick_text:'Önce en az bir akor gir (örn. Am Dm G C).',busy:'Üretiliyor…',noserver:'Sunucuya ulaşılamadı: ',unres:'çözülmemiş',tab_midi:'MIDI dosyası',tab_text:'Manuel akor gir',chord_text_label:'Akor dizisi (örn. Am Dm G C)',chord_text_ph:'Am Dm G C',chord_bpm_label:'BPM',chord_bars_label:'Akor başına ölçü'}};
 const T=k=>S[L][k]||S.en[k];
 function apply(){
   document.documentElement.lang=L;
@@ -78,16 +98,33 @@ function apply(){
 }
 function setLang(l){L=l;try{localStorage.setItem('lang',l)}catch(e){}apply()}
 
+function switchTab(name){
+  TAB=name;
+  ['midi','text'].forEach(n=>{
+    $('tab-'+n).classList.toggle('on',n===name);
+    $('panel-'+n).classList.toggle('on',n===name);
+  });
+}
+
 function renderList(){
   $('list').innerHTML=D.candidates.map((c,k)=>`<div class="row" onclick="select(${k},true)"><b>${c.g>0?'G'+c.g:'#'+c.i}</b><span>${c.s} · o=${c.o.toFixed(2)}<br><small>tension ${c.m.tension} (${T('unres')} ${c.m.unresolved})</small></span><b>${c.m.consonance}</b></div>`).join('');
 }
 
 async function gen(){
-  const f=$('file').files[0];if(!f)return msg(T('pick'));
-  const q=new URLSearchParams({count:$('count').value,grid:$('grid').value,olo:$('olo').value,ohi:$('ohi').value,key:$('key').value,seed:$('seed').value,window:$('window').value,sweep:$('sweep').checked?1:0,lang:L});
+  const q=new URLSearchParams({count:$('count').value,grid:$('grid').value,olo:$('olo').value,ohi:$('ohi').value,key:$('key').value,seed:$('seed').value,sweep:$('sweep').checked?1:0,lang:L});
   msg(T('busy'));
   try{
-    const r=await fetch('/api/generate?'+q,{method:'POST',body:await f.arrayBuffer()}),j=await r.json();
+    let r,j;
+    if(TAB==='midi'){
+      const f=$('file').files[0];if(!f)return msg(T('pick'));
+      const mq=new URLSearchParams(q);mq.append('window',$('window').value);
+      r=await fetch('/api/generate?'+mq,{method:'POST',body:await f.arrayBuffer()});
+    }else{
+      const ct=$('chord_text').value.trim();if(!ct)return msg(T('pick_text'));
+      const tq=new URLSearchParams(q);tq.append('chords_text',ct);tq.append('bpm',$('chord_bpm').value);tq.append('bars',$('chord_bars').value);
+      r=await fetch('/api/generate_chords?'+tq,{method:'POST',body:''});
+    }
+    j=await r.json();
     if(!r.ok)return msg(j.error);
     D=j;msg('');stop();
     $('info').textContent=`${D.key} · ${D.bpm} BPM · ${D.chords.map(c=>c.n).join(' ')} · seed ${D.seed}`;
@@ -133,7 +170,7 @@ function play(){
 addEventListener('resize',()=>draw());
 apply();
 addEventListener('keydown',e=>{
-  if(!D||e.target.matches('input,select'))return;
+  if(!D||e.target.matches('input,select,textarea'))return;
   if(e.code==='Space'){e.preventDefault();ph0?stop():play()}
   else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();select(Math.max(0,Math.min(D.candidates.length-1,sel+(e.key==='ArrowDown'?1:-1))),true)}
 });

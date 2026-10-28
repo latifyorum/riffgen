@@ -7,7 +7,7 @@ import mido
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from riffgen.analysis import detect_key, parse_key, segment_chords  # noqa: E402
+from riffgen.analysis import detect_key, parse_chords_text, parse_key, segment_chords  # noqa: E402
 from riffgen.generator import STRATEGIES, Context, build_candidate, generate_candidates, similarity  # noqa: E402
 from riffgen.io_midi import read_midi, write_midi  # noqa: E402
 from riffgen.models import Key  # noqa: E402
@@ -230,3 +230,145 @@ def test_report_is_localised_and_english_has_no_turkish():
             i18n.set_lang("en")
     assert "consonance" in text_en and not re.search("[çğıöşüÇĞİÖŞÜ]", text_en)
     assert "uyum" in text_tr and "raporu" in text_tr
+
+
+def test_parse_chords_text():
+    chords = parse_chords_text("Am Dm G C", bars_per_chord=1, bpm=120, ticks_per_beat=TPB)
+    assert len(chords) == 4
+    assert [c.label() for c in chords] == ["Am", "Dm", "G", "C"]
+    assert [c.tones for c in chords] == [
+        (9, 0, 4),    # A, C, E
+        (2, 5, 9),    # D, F, A
+        (7, 11, 2),   # G, B, D
+        (0, 4, 7),    # C, E, G
+    ]
+    assert chords[0].start == 0 and chords[0].end == 4 * TPB
+    assert chords[1].start == 4 * TPB and chords[1].end == 8 * TPB
+
+    # Complex chord extensions and flat spellings
+    c2 = parse_chords_text("Bbmaj7 F#m7 Ddim", bars_per_chord=2, bpm=100, ticks_per_beat=TPB)
+    assert len(c2) == 3
+    assert [c.label(flats=True) for c in c2] == ["Bbmaj7", "Gbm7", "Ddim"]
+    assert c2[0].end == 8 * TPB
+
+
+def test_gui_generate_from_chords():
+    from riffgen import gui
+
+    payload = gui.generate_from_chords({
+        "chords_text": "Am F Dm E",
+        "bpm": "110",
+        "bars": "1",
+        "count": "8",
+        "seed": "42",
+    })
+    assert payload["bpm"] == 110.0
+    assert payload["seed"] == 42
+    assert [c["n"] for c in payload["chords"]] == ["Am", "F", "Dm", "E"]
+    assert len(payload["candidates"]) == 8
+    name, data = gui.midi_for(str(payload["candidates"][0]["i"]))
+    assert name.endswith(".mid") and len(data) > 0
+
+
+def test_cli_with_manual_chords():
+    from riffgen.cli import main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = os.path.join(tmp, "out")
+        ret = main(["-c", "Am Dm G C", "--bpm", "125", "-n", "4", "--seed", "7", "-o", out_dir])
+        assert ret == 0
+        assert os.path.exists(os.path.join(out_dir, "all_candidates.mid"))
+        assert os.path.exists(os.path.join(out_dir, "report.txt"))
+        assert os.path.exists(os.path.join(out_dir, "candidates.json"))
+
+
+# ---- manual chord entry: regression tests for the review findings -----------------
+def test_manual_unknown_quality_is_an_error_not_a_major_triad():
+    import pytest
+
+    from riffgen.analysis import parse_chords_text
+
+    for bad in ["Cm5", "Cmb5", "Cmaj7b5", "Cm11x", "Cadd", "C#x", "Am X"]:
+        with pytest.raises(ValueError):
+            parse_chords_text(bad)
+
+
+def test_manual_extended_qualities_and_aliases():
+    from riffgen.analysis import parse_chords_text
+
+    def tones(s):
+        c = parse_chords_text(s)[0]
+        return c.quality, c.tones
+
+    assert tones("Cm9") == ("m9", (0, 3, 7, 10, 2))
+    assert tones("C6") == ("6", (0, 4, 7, 9))
+    assert tones("Cadd9") == ("add9", (0, 4, 7, 2))
+    assert tones("CM7") == ("maj7", (0, 4, 7, 11))
+    assert tones("C+") == ("aug", (0, 4, 8))
+    assert tones("C-") == ("m", (0, 3, 7))
+    assert tones("Cmaj") == ("", (0, 4, 7))
+    assert tones("Bb") == ("", (10, 2, 5))
+
+
+def test_manual_slash_chords_stay_one_chord():
+    from riffgen.analysis import parse_chords_text
+
+    chords = parse_chords_text("C/G Am7/E C/D")
+    assert [c.label() for c in chords] == ["C", "Am7", "C"]
+    assert chords[0].tones == (0, 4, 7)  # G is already a chord tone
+    assert chords[1].tones == (9, 0, 4, 7)  # E is already a chord tone
+    assert chords[2].tones == (0, 4, 7, 2)  # D is added as the bass note
+    assert chords[2].root == 0  # the root is still C
+
+
+def test_manual_params_are_validated():
+    import pytest
+
+    from riffgen.analysis import validate_manual_params
+
+    assert validate_manual_params("110", "2") == (110.0, 2)
+    for bpm, bars in [(0, 1), (-5, 1), ("abc", 1), (float("nan"), 1), (float("inf"), 1), (999, 1), (120, 0), (120, -1), (120, 17), (120, "x")]:
+        with pytest.raises(ValueError):
+            validate_manual_params(bpm, bars)
+
+
+def test_manual_cli_rejects_bad_bpm_and_bars_cleanly():
+    import pytest
+
+    from riffgen import cli
+
+    for extra in (["--bpm", "0"], ["--bpm", "-5"], ["--bars", "0"], ["--bars", "-1"]):
+        with pytest.raises(SystemExit) as e:
+            cli.main(["-c", "Am F", "-o", os.path.join(tempfile.gettempdir(), "rg_bad")] + extra)
+        assert isinstance(e.value.code, str) and "between" in e.value.code  # message, not a traceback
+
+
+def test_manual_gui_rejects_bad_params():
+    import pytest
+
+    from riffgen import gui
+
+    for q in ({"bpm": "-5"}, {"bpm": "0"}, {"bpm": "abc"}, {"bars": "0"}):
+        with pytest.raises(ValueError):
+            gui.generate_from_chords({"chords_text": "Am F", **q})
+    ok = gui.generate_from_chords({"chords_text": "C/G Am", "bpm": "100", "seed": "1", "count": "2"})
+    assert [c["n"] for c in ok["chords"]] == ["C", "Am"]  # slash chord is one chord
+
+
+def test_first_chord_nudges_key_for_extended_minor_chords():
+    from riffgen.analysis import detect_key
+    from riffgen.models import Chord, MidiNote, Song
+
+    # Perfectly balanced A-natural-minor / C-major material: only the nudge can decide.
+    notes = [MidiNote(48 + pc, 0, 480, 90) for pc in (9, 11, 0, 2, 4, 5, 7)]
+    song = Song(ticks_per_beat=480, tempo=500_000, numerator=4, denominator=4, notes=notes)
+
+    def key(quality):
+        first = Chord(0, 1920, 9, quality, (9,)) if quality is not None else None
+        return str(detect_key(song, first_chord=first))
+
+    assert key(None) == "C major"
+    for q in ["m", "m7", "m6", "m9", "madd9", "mmaj7"]:  # minor-like first chord -> A minor
+        assert key(q) == "A minor", q
+    for q in ["", "maj7", "6"]:  # a major-like chord on A does not flip it
+        assert key(q) == "C major", q

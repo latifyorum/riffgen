@@ -11,6 +11,7 @@ yerlerini ve son kararı sen verirsin. Amaç "doğru riff" yazmak değil, çeşi
 ## Özellikler
 
 - Akor ve tonalite tespiti (arpej ve yoğun akor izleri için sabit pencere modu)
+- **Manuel akor girişi**: MIDI dosyası yerine progresyonu elle yaz (`Am F C G`, `Cm9/G`, ...)
 - 6 strateji: `ostinato`, `arpeggio`, `pedal`, `melodic`, `angular`, `crawl`
 - **Outside** ayarı: akor ve gamın ne kadar dışına çıkılacağını 0-1 arasında kontrol eder
 - **Sweep** modu: aynı iskeleti 5 farklı outside seviyesinde üretir, "dışarının" ne kattığını duyarsın
@@ -27,23 +28,57 @@ Arayüz, konsol çıktısı ve rapor İngilizce ve Türkçe destekler. Varsayıl
 
 ## Hızlı başlangıç
 
+Bu repoyu indir ya da klonla (GitHub'daki yeşil **Code** düğmesi), proje klasöründe bir terminal aç ve çalıştır:
+
 ```bash
-git clone https://github.com/latifyorum/riffgen.git
-cd riffgen
 pip install -r requirements.txt
 
 python make_demo.py              # demo_chords.mid üretir (Am | F | Dm | E)
 python -m riffgen.gui            # tarayıcıda arayüzü açar (veya start_gui.py'ye çift tıkla)
 python -m riffgen demo_chords.mid   # veya komut satırından 16 aday üretir
+python -m riffgen -c "Am F C G" --bpm 90   # veya MIDI yerine akorları elle yaz
 ```
 
 Python 3.12'de test edildi; 3.9+ ile uyumlu olması hedeflenmiştir.
+
+## Komut olarak kurulum (isteğe bağlı)
+
+```bash
+pip install .            # veya: pip install -e .   (geliştirme için, düzenlenebilir kurulum)
+riffgen akorlar.mid      # python -m riffgen akorlar.mid ile aynı
+riffgen-gui              # python -m riffgen.gui ile aynı
+```
+
+`pipx install .` da çalışır ve diğer Python paketlerinden ayrı tutar.
+
+## Manuel akor girişi
+
+MIDI dosyasına gerek yok: progresyonu yaz. Web arayüzünde **Manuel akor gir** sekmesini, komut satırında `-c` bayrağını kullan:
+
+```bash
+python -m riffgen -c "Am F C G" --bpm 90
+python -m riffgen -c "Cm9 Fm7 | Bbmaj7 G7" --bars 2 --key Cm
+```
+
+Akorlar boşluk, virgül ya da `|` ile ayrılır. Her akor 4/4 ölçüde `--bars` ölçü sürer (varsayılan 1), tempo `--bpm` (varsayılan 120, izin verilen 20-300).
+
+| Bölüm | Kabul edilenler |
+|---|---|
+| Kök | `A`-`G` (büyük/küçük harf), isteğe bağlı `#` veya `b` (`F#`, `Bb`; `♯`/`♭` de olur) |
+| Tür | boş = majör, `m`, `dim`, `aug`, `sus2`, `sus4`, `5`, `6`, `m6`, `7`, `maj7`, `m7`, `m7b5`, `dim7`, `9`, `m9`, `maj9`, `add9`, `madd9`, `mmaj7` |
+| Takma adlar | `maj`/`M` (majör), `min`/`-` (minör), `M7`/`Δ` (maj7), `+` (aug), `°` (dim), `ø` (m7b5), `sus` (sus4) |
+| Slash bas | `C/G`, `Am7/E`: bas nota akorda yoksa akor seslerine eklenir (kök akorun kökü olarak kalır) |
+
+Bilinmeyen akor türü hata verir; asla sessizce majör üçlüye dönüşmez.
+
+Tonalite akorlardan tahmin edilir (ilk akora ağırlık verilir). `Am7 F C G` gibi bazı progresyonlar A minor ile C major arasında gerçekten belirsizdir;
+önemliyse `--key` (veya arayüzdeki **Tonalite** alanı) ile belirt.
 
 ## Arayüz
 
 `python -m riffgen.gui` komutu `http://127.0.0.1:8765` adresinde yerel bir sayfa açar.
 
-1. Akor MIDI'sini seç, ayarları yap, **Üret** (İngilizce arayüzde **Generate**) düğmesine bas.
+1. **MIDI dosyası** sekmesinde bir akor MIDI'si seç ya da **Manuel akor gir** sekmesinde akorları yaz (BPM ve akor başına ölçü ile), ayarları yap, **Üret** (İngilizce arayüzde **Generate**) düğmesine bas.
 2. Adayı listeden seç: piano roll'da rol renkleriyle görünür (yeşil anchor, sarı color, kırmızı tension) ve otomatik çalar.
 3. **↑/↓** aday seçer, **Boşluk** oynatır/durdurur.
 4. **Bu adayı indir** tek aday, **Hepsini indir** tüm adaylar (ayrı track'ler) olarak .mid verir.
@@ -84,6 +119,9 @@ python -m riffgen akorlarim.mid --key Em --grid 0.25 --seed 7
 | `--seed 7` | Aynı seed aynı sonucu verir |
 | `--no-loop` | Son akordan ilkine geçişi hesaba katma |
 | `--flat-velocity` | Velocity'yi role göre kodlama |
+| `-c "Am F C G"`, `--chords` | MIDI dosyası yerine akorları yaz (ikisi de verilirse akor metni kullanılır) |
+| `--bpm 120` | Manuel akorlar için tempo (20-300) |
+| `--bars 1` | Manuel akorlar için akor başına ölçü (1-16) |
 | `--lang tr` | Arayüz dili: `en` (varsayılan) veya `tr`; `RIFFGEN_LANG` ile de ayarlanır |
 
 ## Rol etiketleri
@@ -123,6 +161,8 @@ uyarlayarak tekrar edebilir (motif tekrarı).
 - Tonalite tahmin edilir (ilk akor ağırlıklı). Yanlışsa `--key` ile düzelt.
 - Gitar katmanı (perde/tel haritası, oynanabilirlik) yok; yalnızca perde aralığı sınırı var.
 - Uyum skoru sezgiseldir.
+- Manuel akorlar 4/4 varsayar ve her akora aynı süreyi verir (`--bars`); bir ölçüde birden fazla akor henüz desteklenmiyor.
+- Slash akorun bas notası akor seslerine eklenir ama akor etiketinde görünmez.
 
 ## Proje yapısı
 

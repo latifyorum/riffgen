@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import i18n
-from .analysis import detect_key, parse_key, segment_chords
+from .analysis import detect_key, parse_chords_text, parse_key, segment_chords, validate_manual_params
 from .generator import Context, generate_candidates
 from .io_midi import read_midi, write_midi
 from .i18n import t
@@ -57,6 +57,55 @@ def generate(midi_bytes: bytes, q: dict) -> dict:
     flats = key.flats
     return {
         "key": str(key), "bpm": round(song.bpm, 1), "tpb": song.ticks_per_beat, "seed": seed,
+        "total": max(c.end for c in chords),
+        "chords": [{"n": c.label(flats), "s": c.start, "e": c.end, "tones": list(c.tones)} for c in chords],
+        "candidates": [
+            {"i": c.index, "s": c.strategy, "o": c.outside, "g": c.group, "m": c.metrics,
+             "n": [{"p": n.pitch, "t": n.tick, "l": n.length, "r": n.role} for n in c.notes]}
+            for c in cands
+        ],
+    }
+
+
+def generate_from_chords(q: dict) -> dict:
+    """Run the pipeline from a manual chord text; returns the same JSON payload as generate()."""
+    from .models import Song  # local import to avoid circular issues at module level
+    i18n.set_lang(q.get("lang", UI_LANG))
+
+    chord_text = q.get("chords_text", "").strip()
+    if not chord_text:
+        raise ValueError(t("err.no_chord_text"))
+
+    bpm, bars_per_chord = validate_manual_params(q.get("bpm", 120), q.get("bars", 1))
+    tempo = int(60_000_000 / bpm)
+    tpb = 480
+
+    chords = parse_chords_text(chord_text, bars_per_chord=bars_per_chord, bpm=bpm, ticks_per_beat=tpb)
+
+    # Build a synthetic Song whose notes are the chord tones (one note per chord tone per bar)
+    from .models import MidiNote
+    notes = []
+    for ch in chords:
+        for pc in ch.tones:
+            midi_pitch = 48 + pc  # octave 3
+            notes.append(MidiNote(pitch=midi_pitch, start=ch.start, end=ch.end, velocity=80))
+
+    song = Song(ticks_per_beat=tpb, tempo=tempo, numerator=4, denominator=4, notes=notes)
+
+    key = parse_key(q["key"]) if q.get("key") else detect_key(song, first_chord=chords[0])
+    ctx = Context(song=song, chords=chords, key=key, grid=float(q.get("grid", 0.5)))
+    cands, seed = generate_candidates(
+        ctx,
+        count=max(1, min(64, int(q.get("count", 16)))),
+        outside_range=(float(q.get("olo", 0)), float(q.get("ohi", 0.9))),
+        seed=int(q["seed"]) if q.get("seed") else None,
+        sweep=q.get("sweep") == "1",
+    )
+    STATE.update(song=song, cands={c.index: c for c in cands})
+
+    flats = key.flats
+    return {
+        "key": str(key), "bpm": round(bpm, 1), "tpb": tpb, "seed": seed,
         "total": max(c.end for c in chords),
         "chords": [{"n": c.label(flats), "s": c.start, "e": c.end, "tones": list(c.tones)} for c in chords],
         "candidates": [
@@ -110,19 +159,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if u.path != "/api/generate":
-            return self._send(404, b"not found", "text/plain")
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        q = {k: v[0] for k, v in parse_qs(u.query).items() if v and v[0] != ""}
-        try:
-            self._send(200, json.dumps(generate(body, q)).encode(), "application/json")
-        except Exception as e:
-            self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False).encode(), "application/json")
+        if u.path == "/api/generate":
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            q = {k: v[0] for k, v in parse_qs(u.query).items() if v and v[0] != ""}
+            try:
+                self._send(200, json.dumps(generate(body, q)).encode(), "application/json")
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False).encode(), "application/json")
+        elif u.path == "/api/generate_chords":
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))  # ignore body
+            q = {k: v[0] for k, v in parse_qs(u.query).items() if v and v[0] != ""}
+            try:
+                self._send(200, json.dumps(generate_from_chords(q)).encode(), "application/json")
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False).encode(), "application/json")
+        else:
+            self._send(404, b"not found", "text/plain")
 
 
 def main(argv=None) -> int:
     global UI_LANG
-    argv = list(argv) if argv is not None else []
+    argv = sys.argv[1:] if argv is None else list(argv)
     UI_LANG = i18n.pick_lang(argv)
     i18n.set_lang(UI_LANG)
     p = argparse.ArgumentParser(prog="riffgen.gui", description=t("g.desc"))

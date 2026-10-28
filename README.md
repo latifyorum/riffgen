@@ -12,6 +12,7 @@ unexpected raw material.
 ## Features
 
 - Chord and key detection (fixed-window mode for arpeggiated or busy chord tracks)
+- **Manual chord entry**: type the progression (`Am F C G`, `Cm9/G`, ...) instead of loading a MIDI file
 - 6 strategies: `ostinato`, `arpeggio`, `pedal`, `melodic`, `angular`, `crawl`
 - **Outside** control (0-1): how far to step outside the chord and scale
 - **Sweep** mode: the same skeleton at 5 outside levels, so you can hear what "outside" adds
@@ -28,23 +29,57 @@ The UI, console output and report support English and Turkish. English is the de
 
 ## Quick start
 
+Download or clone this repository (the green **Code** button on GitHub), open a terminal in the project folder and run:
+
 ```bash
-git clone https://github.com/latifyorum/riffgen.git
-cd riffgen
 pip install -r requirements.txt
 
 python make_demo.py                 # writes demo_chords.mid (Am | F | Dm | E)
 python -m riffgen.gui               # opens the UI in your browser (or double-click start_gui.py)
 python -m riffgen demo_chords.mid   # or generate 16 candidates from the CLI
+python -m riffgen -c "Am F C G" --bpm 90   # or type the chords instead of using a MIDI file
 ```
 
 Tested on Python 3.12; 3.9+ is the intended target.
+
+## Install as a command (optional)
+
+```bash
+pip install .            # or: pip install -e .   (editable, for development)
+riffgen chords.mid       # same as: python -m riffgen chords.mid
+riffgen-gui              # same as: python -m riffgen.gui
+```
+
+`pipx install .` works too and keeps it isolated from your other Python packages.
+
+## Manual chord entry
+
+No MIDI file needed: type the progression. In the web UI use the **Manual chords** tab; on the command line use `-c`:
+
+```bash
+python -m riffgen -c "Am F C G" --bpm 90
+python -m riffgen -c "Cm9 Fm7 | Bbmaj7 G7" --bars 2 --key Cm
+```
+
+Chords are separated by spaces, commas or `|`. Each chord lasts `--bars` bars (default 1) in 4/4 at `--bpm` (default 120, allowed 20-300).
+
+| Part | Accepted |
+|---|---|
+| Root | `A`-`G` (case-insensitive) with an optional `#` or `b` (`F#`, `Bb`; `♯`/`♭` also work) |
+| Quality | none = major, `m`, `dim`, `aug`, `sus2`, `sus4`, `5`, `6`, `m6`, `7`, `maj7`, `m7`, `m7b5`, `dim7`, `9`, `m9`, `maj9`, `add9`, `madd9`, `mmaj7` |
+| Aliases | `maj`/`M` (major), `min`/`-` (minor), `M7`/`Δ` (maj7), `+` (aug), `°` (dim), `ø` (m7b5), `sus` (sus4) |
+| Slash bass | `C/G`, `Am7/E`: the bass note is added to the chord tones if the chord does not already contain it (the root stays the chord's root) |
+
+An unknown chord type is an error; it never falls back to a major triad.
+
+The key is estimated from the chords (weighted toward the first chord). Some progressions, such as `Am7 F C G`, are genuinely
+ambiguous between A minor and C major, so pass `--key` (or fill the **Key** field in the UI) when it matters.
 
 ## Web UI
 
 `python -m riffgen.gui` serves a local page at `http://127.0.0.1:8765`.
 
-1. Pick your chord MIDI, adjust the settings, press **Generate**.
+1. Pick a chord MIDI file on the **MIDI file** tab, or type the chords on the **Manual chords** tab (with BPM and bars per chord), adjust the settings, press **Generate**.
 2. Select a candidate in the list: it is drawn in a piano roll, colored by role (green anchor, yellow color, red
    tension), and plays automatically.
 3. **↑/↓** selects a candidate, **Space** plays/stops.
@@ -80,6 +115,9 @@ Output goes to `riffgen_out/<file name>/`: one .mid per candidate, `all_candidat
 | `--seed 7` | Same seed, same result |
 | `--no-loop` | Do not treat the last chord as leading back to the first |
 | `--flat-velocity` | Do not encode the role in velocity |
+| `-c "Am F C G"`, `--chords` | Type the chords instead of giving a MIDI file (if both are given, the chord text is used) |
+| `--bpm 120` | Tempo for manual chords (20-300) |
+| `--bars 1` | Bars per chord for manual chords (1-16) |
 | `--lang tr` | Interface language: `en` (default) or `tr`; also `RIFFGEN_LANG` |
 
 ## Roles
@@ -119,6 +157,8 @@ adapted to its own tones (motif repetition).
 - The key is estimated (weighted toward the first chord). Override with `--key` if it is wrong.
 - No guitar layer (string/fret mapping, playability); only a pitch-range limit.
 - The score is heuristic.
+- Manual chords assume 4/4 and give every chord the same length (`--bars`); several chords per bar are not supported yet.
+- A slash chord's bass note is added to the chord tones but is not shown in the chord label.
 
 ## Project layout
 

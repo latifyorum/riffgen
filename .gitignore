@@ -5,3 +5,10 @@ riffgen_out/
 .venv/
 venv/
 .DS_Store
+*.egg-info/
+build/
+dist/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

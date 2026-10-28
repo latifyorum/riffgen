@@ -6,15 +6,19 @@ import os
 import sys
 
 from . import i18n, report
-from .analysis import detect_key, parse_key, segment_chords
+from .analysis import detect_key, parse_chords_text, parse_key, segment_chords, validate_manual_params
 from .generator import STRATEGIES, Context, generate_candidates
 from .i18n import t
 from .io_midi import read_midi, write_midi
+from .models import MidiNote, Song
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="riffgen", description=t("cli.desc"))
-    p.add_argument("midi", help=t("h.midi"))
+    p.add_argument("midi", nargs="?", default=None, help=t("h.midi"))
+    p.add_argument("-c", "--chords", default=None, help=t("h.chords_cli"))
+    p.add_argument("--bpm", type=float, default=120.0, help=t("h.bpm_cli"))
+    p.add_argument("--bars", type=int, default=1, help=t("h.bars_cli"))
     p.add_argument("-n", "--count", type=int, default=16, help=t("h.count"))
     p.add_argument("--grid", type=float, default=0.5, help=t("h.grid"))
     p.add_argument("--outside", type=float, default=None, help=t("h.outside"))
@@ -40,6 +44,9 @@ def main(argv=None) -> int:
     i18n.set_lang(i18n.pick_lang(argv))
     args = build_parser().parse_args(argv)
 
+    if not args.midi and not args.chords:
+        sys.exit(t("err.need_midi_or_chords"))
+
     if args.high - args.low < 12:
         sys.exit(t("err.low_high"))
     if args.grid <= 0 or args.count < 1:
@@ -49,9 +56,24 @@ def main(argv=None) -> int:
             sys.exit(t("err.outside"))
 
     try:
-        song = read_midi(args.midi)
-        chords = segment_chords(song, window_beats=args.window)
-        key = parse_key(args.key) if args.key else detect_key(song, first_chord=chords[0])
+        if args.chords:
+            bpm, bars = validate_manual_params(args.bpm, args.bars)
+            tpb = 480
+            tempo = int(60_000_000 / bpm)
+            chords = parse_chords_text(args.chords, bars_per_chord=bars, bpm=bpm, ticks_per_beat=tpb)
+            notes = [
+                MidiNote(pitch=48 + pc, start=ch.start, end=ch.end, velocity=80)
+                for ch in chords
+                for pc in ch.tones
+            ]
+            song = Song(ticks_per_beat=tpb, tempo=tempo, numerator=4, denominator=4, notes=notes)
+            key = parse_key(args.key) if args.key else detect_key(song, first_chord=chords[0])
+            source = "manual_chords"
+        else:
+            song = read_midi(args.midi)
+            chords = segment_chords(song, window_beats=args.window)
+            key = parse_key(args.key) if args.key else detect_key(song, first_chord=chords[0])
+            source = os.path.basename(args.midi)
     except ValueError as e:
         sys.exit(str(e))
 
@@ -63,7 +85,6 @@ def main(argv=None) -> int:
         seed=args.seed, sweep=args.sweep, strategies=args.strategies,
     )
 
-    source = os.path.basename(args.midi)
     out_dir = args.out or os.path.join("riffgen_out", os.path.splitext(source)[0])
     os.makedirs(out_dir, exist_ok=True)
 
